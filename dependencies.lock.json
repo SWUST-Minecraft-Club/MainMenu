@@ -1,0 +1,22 @@
+{
+  "sourceCommit": "2ed15975fd633057321a52cc08b2de8e0d9a21fb",
+  "dependencies": [
+    {
+      "name": "MainMenu",
+      "version": "1.10.1-beta.1",
+      "path": "libs/MainMenu-mc26.3-plugin-1.10.1-beta.1.jar",
+      "sha256": "6fc84d6fd0dc02603abadd77fb1424da08cf9960e4653759d9b5cf68abe988e6",
+      "source": "https://github.com/SWUST-Minecraft-Club/mcPlugin/tree/2ed15975fd633057321a52cc08b2de8e0d9a21fb/Minecraft-26_3-plugin/MainMenu",
+      "repository": "https://github.com/SWUST-Minecraft-Club/MainMenu",
+      "license": "MIT",
+      "usage": "compile/test only; full plugin JAR, not embedded"
+    },
+    {
+      "name": "arcmenu",
+      "path": "libs/arcmenu-api-3.2.0.jar",
+      "sha256": "85c4983d44fce42ff1c3fbb66728dcaccab17273416cc900d2b1b74d7de36367",
+      "source": "https://github.com/SWUST-Minecraft-Club/mcPlugin/tree/2ed15975fd633057321a52cc08b2de8e0d9a21fb/libs/arcmenu-api-3.2.0.jar",
+      "usage": "compile only; external API; see upstream sources in docs/DEPENDENCIES.md"
+    }
+  ]
+}

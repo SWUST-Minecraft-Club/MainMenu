@@ -1,0 +1,200 @@
+package com.example.mainmenu.internal;
+
+import com.example.mainmenu.MainMenuPlugin;
+import com.example.mainmenu.api.MenuFeature;
+import com.example.mainmenu.util.Schedulers;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Map;
+import java.util.OptionalInt;
+import java.util.logging.Level;
+import net.kyori.adventure.text.Component;
+import net.kyori.adventure.text.format.NamedTextColor;
+import net.kyori.adventure.text.format.TextDecoration;
+import org.bukkit.Bukkit;
+import org.bukkit.Material;
+import org.bukkit.entity.Player;
+import org.bukkit.event.inventory.ClickType;
+import org.bukkit.event.player.PlayerCommandPreprocessEvent;
+import org.bukkit.inventory.ItemStack;
+import org.bukkit.inventory.meta.ItemMeta;
+
+/**
+ * 管理员在管理页创建、由 {@code custom-features.yml} 配置的自定义功能。
+ *
+ * <p>它和普通功能插件注册的功能走同一套管理逻辑：显示 / 隐藏、排序、固定位置都由
+ * {@link FeatureStateStore} 管理。配置文件只负责外观与点击行为：
+ * <ul>
+ *     <li>{@code name}：显示名（纯文本）；</li>
+ *     <li>{@code icon}：Bukkit 材质名，默认 {@code PAPER}；</li>
+ *     <li>{@code command}：未单独配置点击类型时执行的默认指令（不带 {@code /}）；</li>
+ *     <li>{@code commands}：按 left / right / shift-left / shift-right / middle 覆盖指令，空字符串禁用；</li>
+ *     <li>{@code description}：悬停文本，MiniMessage 列表；</li>
+ *     <li>{@code order}：默认排序值（管理页可覆盖）。</li>
+ * </ul>
+ */
+public final class CustomCommandFeature implements MenuFeature {
+
+    private final MainMenuPlugin plugin;
+    private final String id;
+    private final String name;
+    private final Material icon;
+    private final CustomFeatureCommands commands;
+    private final List<String> description;
+    private final int order;
+
+    public CustomCommandFeature(final MainMenuPlugin plugin, final String id, final String name,
+                                final String iconName, final String command,
+                                final List<String> description, final int order) {
+        this(plugin, id, name, iconName, new CustomFeatureCommands(command, Map.of()), description, order);
+    }
+
+    CustomCommandFeature(final MainMenuPlugin plugin, final String id, final String name,
+                         final String iconName, final CustomFeatureCommands commands,
+                         final List<String> description, final int order) {
+        this(plugin, id, name, resolveIcon(plugin, id, iconName), commands, description, order);
+    }
+
+    CustomCommandFeature(final MainMenuPlugin plugin, final String id, final String name,
+                         final Material icon, final CustomFeatureCommands commands,
+                         final List<String> description, final int order) {
+        this.plugin = plugin;
+        this.id = id;
+        this.name = name == null || name.isBlank() ? id : name.trim();
+        this.icon = icon;
+        this.commands = commands;
+        this.description = description == null ? List.of() : List.copyOf(description);
+        this.order = order;
+    }
+
+    private static Material resolveIcon(final MainMenuPlugin plugin, final String id, final String iconName) {
+        Material material = null;
+        try {
+            material = Material.matchMaterial(iconName == null ? "" : iconName.trim());
+        } catch (RuntimeException ignored) {
+            // 非法材质名按默认纸处理
+        }
+        if (material == null || material.isAir()) {
+            material = Material.PAPER;
+            if (iconName != null && !iconName.isBlank()) {
+                plugin.getLogger().warning("自定义功能 " + id + " 的 icon 无效：" + iconName
+                        + "，已回退为 PAPER");
+            }
+        }
+        return material;
+    }
+
+    @Override
+    public String id() {
+        return id;
+    }
+
+    @Override
+    public String owner() {
+        return "自定义";
+    }
+
+    @Override
+    public ItemStack icon() {
+        final ItemStack item = new ItemStack(icon);
+        final ItemMeta meta = item.getItemMeta();
+        if (meta != null) {
+            meta.displayName(Component.text(name, NamedTextColor.WHITE)
+                    .decorationIfAbsent(TextDecoration.ITALIC, TextDecoration.State.FALSE));
+            item.setItemMeta(meta);
+        }
+        return item;
+    }
+
+    @Override
+    public List<Component> description() {
+        final List<Component> lines = new ArrayList<>();
+        final List<String> raw = description.isEmpty()
+                ? List.of("<gray>自定义功能</gray>")
+                : description;
+        for (final String line : raw) {
+            if (line == null || line.isBlank()) {
+                continue;
+            }
+            try {
+                lines.add(plugin.miniRaw(line));
+            } catch (RuntimeException ex) {
+                lines.add(Component.text(line, NamedTextColor.GRAY)
+                        .decorationIfAbsent(TextDecoration.ITALIC, TextDecoration.State.FALSE));
+            }
+        }
+        if (!clickable()) {
+            lines.add(Component.text("未配置点击指令（编辑 custom-features.yml 后 /cd reload）",
+                            NamedTextColor.RED)
+                    .decorationIfAbsent(TextDecoration.ITALIC, TextDecoration.State.FALSE));
+        }
+        return lines;
+    }
+
+    @Override
+    public boolean clickable() {
+        return commands.clickable();
+    }
+
+    @Override
+    public boolean clickable(final ClickType clickType) {
+        return !commands.command(clickType).isBlank();
+    }
+
+    @Override
+    public void onClick(final Player player, final ClickType clickType) {
+        final String execute = commands.command(clickType);
+        if (execute.isBlank()) {
+            return;
+        }
+
+        // 先关闭主菜单，下一 tick 按“玩家手动输入指令”的流程执行。
+        // Bukkit.dispatchCommand 不会触发 PlayerCommandPreprocessEvent；部分插件（例如 PlayerTitle 的
+        // /plt gui）正是在该事件里处理子命令并取消事件，所以这里必须手动补上这一步。
+        player.closeInventory();
+        Schedulers.runForDelayed(plugin, player, () -> {
+            if (!player.isOnline()) {
+                return;
+            }
+            try {
+                final PlayerCommandPreprocessEvent event =
+                        new PlayerCommandPreprocessEvent(player, "/" + execute);
+                Bukkit.getPluginManager().callEvent(event);
+                if (event.isCancelled()) {
+                    // 目标插件已经在事件里处理了（PlayerTitle 会打开称号仓库）
+                    return;
+                }
+
+                String message = event.getMessage();
+                if (message.startsWith("/")) {
+                    message = message.substring(1);
+                }
+                message = message.trim();
+                if (message.isEmpty()) {
+                    return;
+                }
+                if (!Bukkit.dispatchCommand(player, message)) {
+                    player.sendMessage(Component.text(
+                                    "[MainMenu] 指令不可用或没有权限：/" + message, NamedTextColor.RED)
+                            .decorationIfAbsent(TextDecoration.ITALIC, TextDecoration.State.FALSE));
+                }
+            } catch (Throwable ex) {
+                plugin.getLogger().log(Level.WARNING,
+                        "自定义功能 " + id + " 执行指令失败：" + execute, ex);
+                player.sendMessage(Component.text(
+                                "[MainMenu] 指令执行失败：/" + execute, NamedTextColor.RED)
+                        .decorationIfAbsent(TextDecoration.ITALIC, TextDecoration.State.FALSE));
+            }
+        }, 1L);
+    }
+
+    @Override
+    public OptionalInt preferredSlot() {
+        return OptionalInt.empty();
+    }
+
+    @Override
+    public int order() {
+        return order;
+    }
+}
